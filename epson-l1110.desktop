@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Epson L1110 Control Center
+Comment=Driver & Pusat Kontrol Printer Epson EcoTank L1110
+Exec=python3 "/media/fatihfarhat/New Volume1/PROJECTS/epson-l1110-driver/src/main.py"
+Icon=printer
+Terminal=false
+Categories=Utility;Printing;HardwareSettings;
+StartupNotify=true
