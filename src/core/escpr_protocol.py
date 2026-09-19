@@ -188,8 +188,6 @@ class ESCPRBuilder:
         buf.append(0x01)
         buf.extend(struct.pack("<H", len(payload)))
         buf.extend(payload)
-        # Line feed
-        buf.extend(b"\r\n")
         return bytes(buf)
 
     def generate_footer(self) -> bytes:

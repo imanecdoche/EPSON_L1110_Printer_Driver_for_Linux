@@ -11,7 +11,7 @@ Supports:
 """
 
 import os
-from typing import List, Tuple, Optional, Generator
+from typing import List, Tuple, Optional, Generator, Callable
 from PIL import Image, ImageOps
 import pymupdf  # Official PyMuPDF import
 
@@ -253,6 +253,49 @@ class DocumentRasterizer:
             job_data.extend(self.builder.generate_footer())
 
         return bytes(job_data)
+
+    def generate_print_pdf(
+        self,
+        file_path: str,
+        output_path: str,
+        pages: Optional[List[int]] = None,
+        reverse_order: bool = False,
+        dpi: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> str:
+        """
+        Renders all selected pages with accurate margins, scaling, and positioning
+        into a multi-page high-resolution PDF for submission to the CUPS print system.
+        """
+        total_pages = self.get_page_count(file_path)
+        pages_to_print = pages if pages is not None else list(range(total_pages))
+        if reverse_order:
+            pages_to_print = list(reversed(pages_to_print))
+
+        if not pages_to_print:
+            raise ValueError("Tidak ada halaman yang dipilih untuk dicetak.")
+
+        effective_dpi = dpi or min(self.resolution.value, 720)
+        total_selected = len(pages_to_print)
+
+        rendered_images: List[Image.Image] = []
+        for idx, p in enumerate(pages_to_print):
+            if progress_callback:
+                progress_callback(idx + 1, total_selected)
+            page_img = self.render_page_image(file_path, page_number=p, dpi=effective_dpi)
+            if self.color_mode == ColorMode.MONOCHROME:
+                page_img = page_img.convert("L")
+            rendered_images.append(page_img)
+
+        # Save to high-resolution PDF
+        rendered_images[0].save(
+            output_path,
+            "PDF",
+            resolution=float(effective_dpi),
+            save_all=True,
+            append_images=rendered_images[1:] if len(rendered_images) > 1 else [],
+        )
+        return output_path
 
 
 def parse_page_selection(

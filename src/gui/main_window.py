@@ -373,7 +373,7 @@ class MainWindow(QMainWindow):
         self.lbl_device_status = QLabel("Printer: <b>Epson EcoTank L1110</b>")
         status_box.addWidget(self.lbl_device_status)
 
-        conn_text = "Jalur: Direct USB (Siap)" if self.usb_device else "Jalur: CUPS Spooler (Siap)"
+        conn_text = "Jalur: Driver CUPS Epson (Siap)"
         self.lbl_conn_status = QLabel(conn_text)
         self.lbl_conn_status.setStyleSheet("color: #2e7d32; font-size: 12px;")
         status_box.addWidget(self.lbl_conn_status)

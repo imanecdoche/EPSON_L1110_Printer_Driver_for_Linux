@@ -136,12 +136,73 @@ def test_print_order():
             os.unlink(pdf_path)
 
 
+def test_generate_print_pdf():
+    print("\nTesting generate_print_pdf for CUPS pipeline...")
+    import pymupdf
+    from src.gui.worker_thread import map_paper_to_cups_pagesize
+
+    doc = pymupdf.open()
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_text((50, 50), "PDF PAGE ONE")
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_text((50, 50), "PDF PAGE TWO")
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_in:
+        doc.save(tmp_in.name)
+        pdf_in = tmp_in.name
+    doc.close()
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_out:
+        pdf_out = tmp_out.name
+
+    try:
+        rasterizer = DocumentRasterizer(
+            paper=PAPER_SIZES["A4"],
+            resolution=Resolution.DRAFT_360,
+            margins_mm=(10.0, 10.0, 15.0, 15.0),
+            scaling_mode="fit",
+            position_offset_mm=(5.0, -5.0),
+        )
+
+        progress_called = []
+        def on_prog(curr, tot):
+            progress_called.append((curr, tot))
+
+        out_path = rasterizer.generate_print_pdf(
+            pdf_in,
+            pdf_out,
+            pages=[0, 1],
+            progress_callback=on_prog,
+            dpi=150,
+        )
+        assert os.path.exists(out_path)
+        assert len(progress_called) == 2
+
+        out_doc = pymupdf.open(out_path)
+        assert len(out_doc) == 2
+        print(f"  Generated multi-page print PDF with {len(out_doc)} pages at dimensions: {out_doc[0].rect}")
+        out_doc.close()
+
+        # Test PageSize mapping
+        assert map_paper_to_cups_pagesize("A4 (210 x 297 mm)") == "A4"
+        assert map_paper_to_cups_pagesize("F4 / Folio (215 x 330 mm)") == "Legal"
+        assert map_paper_to_cups_pagesize("Letter (8.5 x 11 in)") == "Letter"
+        print("[PASS] generate_print_pdf and CUPS PageSize mapping verified!")
+    finally:
+        if os.path.exists(pdf_in):
+            os.unlink(pdf_in)
+        if os.path.exists(pdf_out):
+            os.unlink(pdf_out)
+
+
 if __name__ == "__main__":
     test_packbits()
     test_f4_dimensions()
     test_rasterizer_job_generation()
     test_maintenance_commands()
     test_print_order()
+    test_generate_print_pdf()
     print("\n========================================")
     print("ALL RASTERIZER & PROTOCOL TESTS PASSED!")
     print("========================================")
+
