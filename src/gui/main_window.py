@@ -40,6 +40,7 @@ from ..core.usb_device import EpsonUSBDevice
 from .ink_widget import InkLevelWidget
 from .preview_widget import PreviewWidget
 from .worker_thread import PrintJobWorker, MaintenanceWorker
+from .cleaning_dialog import HeadCleaningDialog
 
 
 class MainWindow(QMainWindow):
@@ -318,9 +319,25 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Gagal Mencetak", msg)
 
     def _trigger_maintenance(self, action: str):
-        """Executes maintenance action in background."""
+        """Executes maintenance action."""
+        if action == "clean":
+            reply = QMessageBox.question(
+                self,
+                "Konfirmasi Head Cleaning",
+                "Jalankan Pembersihan Head (Head Cleaning) pada printer Epson L1110?\n\n"
+                "Siklus mekanis ini membutuhkan waktu sekitar 75-80 detik dan menggunakan sedikit tinta "
+                "untuk membilas dan melancarkan nozzle yang tersumbat.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            dialog = HeadCleaningDialog(self.maintenance_controller, self.usb_device, parent=self)
+            dialog.request_nozzle_check.connect(lambda: self._trigger_maintenance("nozzle"))
+            dialog.exec()
+            return
+
         action_names = {
-            "clean": "Pembersihan Head (Head Cleaning)",
             "nozzle": "Cetak Pola Uji Nozzle",
             "eject": "Keluarkan Kertas",
         }
