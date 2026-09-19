@@ -101,11 +101,47 @@ def test_maintenance_commands():
     print("[PASS] Maintenance command formats verified!")
 
 
+def test_print_order():
+    print("\nTesting Print Order (Normal vs Reverse)...")
+    import pymupdf
+    # Create a 2-page PDF
+    doc = pymupdf.open()
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_text((100, 100), "PAGE ONE")
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_text((100, 100), "PAGE TWO")
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        doc.save(tmp.name)
+        pdf_path = tmp.name
+    doc.close()
+
+    try:
+        rasterizer = DocumentRasterizer(paper=PAPER_SIZES["A4"], resolution=Resolution.DRAFT_360)
+        assert rasterizer.get_page_count(pdf_path) == 2
+
+        # Normal order
+        job_normal = rasterizer.generate_print_job(pdf_path, reverse_order=False)
+        assert len(job_normal) > 0
+
+        # Reverse order
+        job_reverse = rasterizer.generate_print_job(pdf_path, reverse_order=True)
+        assert len(job_reverse) > 0
+
+        print(f"  Normal print job size : {len(job_normal)} bytes")
+        print(f"  Reverse print job size: {len(job_reverse)} bytes")
+        print("[PASS] Print order test passed!")
+    finally:
+        if os.path.exists(pdf_path):
+            os.unlink(pdf_path)
+
+
 if __name__ == "__main__":
     test_packbits()
     test_f4_dimensions()
     test_rasterizer_job_generation()
     test_maintenance_commands()
+    test_print_order()
     print("\n========================================")
     print("ALL RASTERIZER & PROTOCOL TESTS PASSED!")
     print("========================================")

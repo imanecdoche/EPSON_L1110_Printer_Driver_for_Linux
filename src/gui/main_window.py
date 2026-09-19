@@ -151,6 +151,14 @@ class MainWindow(QMainWindow):
         self.spin_copies.setValue(1)
         left_layout.addWidget(self.spin_copies)
 
+        # Print Order (Normal vs Reverse)
+        lbl_order = QLabel("<b>Urutan Cetak (Print Order):</b>")
+        left_layout.addWidget(lbl_order)
+        self.combo_order = QComboBox()
+        self.combo_order.addItem("Normal (Depan ke Belakang: 1 → Akhir)", userData=False)
+        self.combo_order.addItem("Reverse (Belakang ke Depan: Akhir → 1)", userData=True)
+        left_layout.addWidget(self.combo_order)
+
         left_layout.addStretch()
 
         # Print Button
@@ -288,6 +296,7 @@ class MainWindow(QMainWindow):
 
         rasterizer = self._get_current_rasterizer()
         copies = self.spin_copies.value()
+        reverse_order = bool(self.combo_order.currentData())
 
         # UI state
         self.btn_print.setEnabled(False)
@@ -298,6 +307,7 @@ class MainWindow(QMainWindow):
             file_path=self.current_file_path,
             rasterizer=rasterizer,
             copies=copies,
+            reverse_order=reverse_order,
             usb_device=self.usb_device,
         )
         self.active_print_worker.progress_updated.connect(self._on_print_progress)

@@ -29,6 +29,7 @@ class PrintJobWorker(QThread):
         file_path: str,
         rasterizer: DocumentRasterizer,
         copies: int = 1,
+        reverse_order: bool = False,
         usb_device: Optional[EpsonUSBDevice] = None,
         cups_printer: str = "EPSON-L1110-Series",
         parent=None,
@@ -37,6 +38,7 @@ class PrintJobWorker(QThread):
         self.file_path = file_path
         self.rasterizer = rasterizer
         self.copies = max(1, copies)
+        self.reverse_order = reverse_order
         self.usb_device = usb_device
         self.cups_printer = cups_printer
 
@@ -45,8 +47,9 @@ class PrintJobWorker(QThread):
             self.progress_updated.emit(10, "Memulai proses rasterisasi dokumen...")
 
             # 1. Generate ESC/P-R binary print job
-            self.progress_updated.emit(30, "Merender halaman dan kompresi PackBits...")
-            job_bytes = self.rasterizer.generate_print_job(self.file_path)
+            order_desc = "Belakang ke Depan (Reverse)" if self.reverse_order else "Depan ke Belakang (Normal)"
+            self.progress_updated.emit(30, f"Merender halaman [{order_desc}] dan kompresi PackBits...")
+            job_bytes = self.rasterizer.generate_print_job(self.file_path, reverse_order=self.reverse_order)
 
             self.progress_updated.emit(70, f"Aliran data biner siap ({len(job_bytes):,} bytes)...")
 

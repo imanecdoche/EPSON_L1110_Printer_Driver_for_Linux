@@ -119,13 +119,18 @@ class DocumentRasterizer:
         """Generates a lightweight preview image suitable for display in GUI canvas."""
         return self.render_page_image(file_path, page_number=page_number, dpi=preview_dpi)
 
-    def generate_print_job(self, file_path: str, pages: Optional[List[int]] = None) -> bytes:
+    def generate_print_job(
+        self, file_path: str, pages: Optional[List[int]] = None, reverse_order: bool = False
+    ) -> bytes:
         """
         Generates a complete, ready-to-stream ESC/P-R binary print job (.prn)
         for all requested pages.
+        reverse_order: If True, prints from last page down to first page (N -> 1).
         """
         total_pages = self.get_page_count(file_path)
         pages_to_print = pages if pages is not None else list(range(total_pages))
+        if reverse_order:
+            pages_to_print = list(reversed(pages_to_print))
 
         job_data = bytearray()
         job_data.extend(self.builder.generate_init())
