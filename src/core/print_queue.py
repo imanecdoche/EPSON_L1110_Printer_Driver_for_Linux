@@ -31,6 +31,7 @@ class PrintJob:
     copies: int
     total_pages: int
     reverse_order: bool = False
+    pages: Optional[List[int]] = None
     status: JobStatus = JobStatus.QUEUED
     progress: int = 0
     created_at: str = field(default_factory=lambda: time.strftime("%H:%M:%S"))
@@ -58,11 +59,14 @@ class PrintQueueManager:
         copies: int,
         total_pages: int,
         reverse_order: bool = False,
+        pages: Optional[List[int]] = None,
     ) -> PrintJob:
         """Enqueues a new document print job."""
         job_id = f"#{self._counter}"
         self._counter += 1
         file_name = os.path.basename(file_path) if file_path else "Dokumen Tanpa Nama"
+
+        effective_pages = len(pages) if (pages is not None and len(pages) > 0) else total_pages
 
         job = PrintJob(
             job_id=job_id,
@@ -70,8 +74,9 @@ class PrintQueueManager:
             file_name=file_name,
             rasterizer=rasterizer,
             copies=copies,
-            total_pages=total_pages,
+            total_pages=effective_pages,
             reverse_order=reverse_order,
+            pages=pages,
             status=JobStatus.QUEUED,
             status_detail="Menunggu antrean eksekusi",
         )

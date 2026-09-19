@@ -19,13 +19,17 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QComboBox,
     QSpinBox,
+    QDoubleSpinBox,
+    QLineEdit,
+    QScrollArea,
+    QFrame,
     QFileDialog,
     QMessageBox,
     QProgressBar,
     QStatusBar,
 )
 from PyQt6.QtCore import Qt, QTimer
-from typing import Optional
+from typing import Optional, List
 
 from ..core.escpr_protocol import (
     PAPER_SIZES,
@@ -34,7 +38,7 @@ from ..core.escpr_protocol import (
     ColorMode,
     PaperSize,
 )
-from ..core.rasterizer import DocumentRasterizer
+from ..core.rasterizer import DocumentRasterizer, parse_page_selection
 from ..core.maintenance import MaintenanceController
 from ..core.usb_device import EpsonUSBDevice
 from ..core.ink_tracker import InkTracker
@@ -101,10 +105,19 @@ class MainWindow(QMainWindow):
         # 1. LEFT PANEL: Print Settings
         # -------------------------------------------------------------
         panel_left = QGroupBox("Pengaturan Cetak")
-        panel_left.setFixedWidth(280)
-        left_layout = QVBoxLayout(panel_left)
-        left_layout.setContentsMargins(10, 14, 10, 10)
-        left_layout.setSpacing(10)
+        panel_left.setFixedWidth(310)
+        panel_outer = QVBoxLayout(panel_left)
+        panel_outer.setContentsMargins(2, 6, 2, 4)
+
+        scroll_left = QScrollArea()
+        scroll_left.setWidgetResizable(True)
+        scroll_left.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_left.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(6, 4, 6, 6)
+        left_layout.setSpacing(8)
 
         # File Chooser
         lbl_doc_title = QLabel("<b>Dokumen Sumber:</b>")
@@ -120,16 +133,15 @@ class MainWindow(QMainWindow):
         self.lbl_selected_file.setWordWrap(True)
         left_layout.addWidget(self.lbl_selected_file)
 
-        left_layout.addSpacing(6)
+        left_layout.addSpacing(4)
 
         # Paper Size Selection (Default: F4 / Folio)
         lbl_paper = QLabel("<b>Ukuran Kertas:</b>")
         left_layout.addWidget(lbl_paper)
         self.combo_paper = QComboBox()
-        # Add F4 as primary default
         for key, psize in PAPER_SIZES.items():
             self.combo_paper.addItem(psize.name, userData=key)
-        self.combo_paper.setCurrentIndex(0)  # F4 is at index 0
+        self.combo_paper.setCurrentIndex(0)  # F4 default
         self.combo_paper.currentIndexChanged.connect(self._on_settings_changed)
         left_layout.addWidget(self.combo_paper)
 
@@ -177,7 +189,73 @@ class MainWindow(QMainWindow):
         self.combo_order.addItem("Reverse (Belakang ke Depan: Akhir → 1)", userData=True)
         left_layout.addWidget(self.combo_order)
 
-        left_layout.addStretch()
+        # Page Selection Mode (All, Odd, Even, Custom Range)
+        lbl_pages = QLabel("<b>Pilihan Halaman (Page Range):</b>")
+        left_layout.addWidget(lbl_pages)
+        self.combo_page_range = QComboBox()
+        self.combo_page_range.addItem("Semua Halaman (All Pages)", userData="all")
+        self.combo_page_range.addItem("Halaman Ganjil Saja (1, 3, 5...)", userData="odd")
+        self.combo_page_range.addItem("Halaman Genap Saja (2, 4, 6...)", userData="even")
+        self.combo_page_range.addItem("Kustom / Tertentu (contoh: 1-3, 5, 8)", userData="custom")
+        self.combo_page_range.currentIndexChanged.connect(self._on_page_selection_changed)
+        left_layout.addWidget(self.combo_page_range)
+
+        self.edit_custom_pages = QLineEdit()
+        self.edit_custom_pages.setPlaceholderText("Contoh: 1-3, 5, 8 atau 3,6,8")
+        self.edit_custom_pages.setEnabled(False)
+        self.edit_custom_pages.textChanged.connect(self._on_page_selection_changed)
+        left_layout.addWidget(self.edit_custom_pages)
+
+        # Custom Margins (Top, Bottom, Left, Right in mm)
+        lbl_margin_title = QLabel("<b>Margin Kustom (mm):</b>")
+        left_layout.addWidget(lbl_margin_title)
+
+        margin_grid = QGridLayout()
+        margin_grid.setSpacing(4)
+
+        margin_grid.addWidget(QLabel("Atas:"), 0, 0)
+        self.spin_margin_top = QDoubleSpinBox()
+        self.spin_margin_top.setRange(0.0, 100.0)
+        self.spin_margin_top.setSingleStep(1.0)
+        self.spin_margin_top.setValue(0.0)
+        self.spin_margin_top.setDecimals(1)
+        self.spin_margin_top.setSuffix(" mm")
+        self.spin_margin_top.valueChanged.connect(self._on_settings_changed)
+        margin_grid.addWidget(self.spin_margin_top, 0, 1)
+
+        margin_grid.addWidget(QLabel("Bawah:"), 0, 2)
+        self.spin_margin_bottom = QDoubleSpinBox()
+        self.spin_margin_bottom.setRange(0.0, 100.0)
+        self.spin_margin_bottom.setSingleStep(1.0)
+        self.spin_margin_bottom.setValue(0.0)
+        self.spin_margin_bottom.setDecimals(1)
+        self.spin_margin_bottom.setSuffix(" mm")
+        self.spin_margin_bottom.valueChanged.connect(self._on_settings_changed)
+        margin_grid.addWidget(self.spin_margin_bottom, 0, 3)
+
+        margin_grid.addWidget(QLabel("Kiri:"), 1, 0)
+        self.spin_margin_left = QDoubleSpinBox()
+        self.spin_margin_left.setRange(0.0, 100.0)
+        self.spin_margin_left.setSingleStep(1.0)
+        self.spin_margin_left.setValue(0.0)
+        self.spin_margin_left.setDecimals(1)
+        self.spin_margin_left.setSuffix(" mm")
+        self.spin_margin_left.valueChanged.connect(self._on_settings_changed)
+        margin_grid.addWidget(self.spin_margin_left, 1, 1)
+
+        margin_grid.addWidget(QLabel("Kanan:"), 1, 2)
+        self.spin_margin_right = QDoubleSpinBox()
+        self.spin_margin_right.setRange(0.0, 100.0)
+        self.spin_margin_right.setSingleStep(1.0)
+        self.spin_margin_right.setValue(0.0)
+        self.spin_margin_right.setDecimals(1)
+        self.spin_margin_right.setSuffix(" mm")
+        self.spin_margin_right.valueChanged.connect(self._on_settings_changed)
+        margin_grid.addWidget(self.spin_margin_right, 1, 3)
+
+        left_layout.addLayout(margin_grid)
+
+        left_layout.addSpacing(6)
 
         # Informative Total Pages to Print Box (Physical pages = doc pages * copies)
         self.lbl_total_print_pages = QLabel("Total halaman dicetak: <b>0 lembar</b>")
@@ -216,6 +294,9 @@ class MainWindow(QMainWindow):
         self.btn_print.setEnabled(False)
         self.btn_print.clicked.connect(self._start_print_job)
         left_layout.addWidget(self.btn_print)
+
+        scroll_left.setWidget(left_widget)
+        panel_outer.addWidget(scroll_left)
 
         main_layout.addWidget(panel_left)
 
@@ -319,14 +400,45 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Siap — Sistem siap menerima instruksi cetak.")
 
     def _get_current_rasterizer(self) -> DocumentRasterizer:
-        """Constructs DocumentRasterizer according to selected UI options."""
+        """Constructs DocumentRasterizer according to selected UI options and custom margins."""
         paper_key = self.combo_paper.currentData()
         paper = PAPER_SIZES.get(paper_key, PAPER_SIZES["F4"])
         dpi = self.combo_dpi.currentData()
         media = self.combo_media.currentData()
         color = self.combo_color.currentData()
 
-        return DocumentRasterizer(paper=paper, resolution=dpi, media=media, color_mode=color)
+        top = self.spin_margin_top.value() if hasattr(self, "spin_margin_top") else 0.0
+        bottom = self.spin_margin_bottom.value() if hasattr(self, "spin_margin_bottom") else 0.0
+        left = self.spin_margin_left.value() if hasattr(self, "spin_margin_left") else 0.0
+        right = self.spin_margin_right.value() if hasattr(self, "spin_margin_right") else 0.0
+        margins_mm = (top, bottom, left, right)
+
+        return DocumentRasterizer(
+            paper=paper,
+            resolution=dpi,
+            media=media,
+            color_mode=color,
+            margins_mm=margins_mm,
+        )
+
+    def _get_selected_pages(self) -> List[int]:
+        """Returns 0-indexed list of selected page indices according to range/filtering options."""
+        if not self.current_file_path or self.imported_doc_pages <= 0:
+            return []
+        mode = self.combo_page_range.currentData()
+        custom_str = self.edit_custom_pages.text().strip()
+        return parse_page_selection(mode, custom_str, self.imported_doc_pages)
+
+    def _on_page_selection_changed(self):
+        """Triggered when page range mode or custom input changes."""
+        mode = self.combo_page_range.currentData()
+        is_custom = (mode == "custom")
+        self.edit_custom_pages.setEnabled(is_custom)
+
+        self._update_total_print_pages_label()
+        if self.current_file_path:
+            pages = self._get_selected_pages()
+            self.preview_widget.set_page_indices(pages)
 
     def load_file(self, path: str):
         """Loads a document file into the preview and print system."""
@@ -334,7 +446,6 @@ class MainWindow(QMainWindow):
             return
         self.current_file_path = os.path.abspath(path)
         self.lbl_selected_file.setText(os.path.basename(path))
-        self.btn_print.setEnabled(True)
         rasterizer = self._get_current_rasterizer()
         try:
             self.imported_doc_pages = rasterizer.get_page_count(self.current_file_path)
@@ -350,27 +461,33 @@ class MainWindow(QMainWindow):
         if path:
             self.load_file(path)
 
-
     def _update_total_print_pages_label(self):
-        """Calculates and displays total physical pages to be printed (doc pages * copies)."""
+        """Calculates and displays total physical pages to be printed (selected pages * copies)."""
         copies = self.spin_copies.value()
         if self.current_file_path and self.imported_doc_pages > 0:
-            total_print_pages = self.imported_doc_pages * copies
+            selected_pages = self._get_selected_pages()
+            n_selected = len(selected_pages)
+            total_print_pages = n_selected * copies
+
             if copies > 1:
-                self.lbl_total_print_pages.setText(
-                    f"Total halaman dicetak: <b>{total_print_pages} lembar</b><br>"
-                    f"<span style='color: #555555; font-size: 11px;'>({copies} salinan × {self.imported_doc_pages} halaman dokumen)</span>"
-                )
+                detail_text = f"({copies} salinan × {n_selected} halaman terpilih)"
             else:
-                self.lbl_total_print_pages.setText(
-                    f"Total halaman dicetak: <b>{total_print_pages} lembar</b><br>"
-                    f"<span style='color: #555555; font-size: 11px;'>(1 salinan × {self.imported_doc_pages} halaman dokumen)</span>"
-                )
+                detail_text = f"(1 salinan × {n_selected} halaman terpilih)"
+
+            if n_selected != self.imported_doc_pages:
+                detail_text += f" <span style='color: #777;'>[dari total {self.imported_doc_pages} hal. dokumen]</span>"
+
+            self.lbl_total_print_pages.setText(
+                f"Total halaman dicetak: <b>{total_print_pages} lembar</b><br>"
+                f"<span style='color: #555555; font-size: 11px;'>{detail_text}</span>"
+            )
+            self.btn_print.setEnabled(n_selected > 0)
         else:
             self.lbl_total_print_pages.setText("Total halaman dicetak: <b>0 lembar</b>")
+            self.btn_print.setEnabled(False)
 
     def _on_settings_changed(self):
-        """Triggered when paper or resolution changes."""
+        """Triggered when paper, resolution, or margins change."""
         if self.current_file_path:
             self._update_preview()
 
@@ -379,7 +496,8 @@ class MainWindow(QMainWindow):
         if not self.current_file_path:
             return
         rasterizer = self._get_current_rasterizer()
-        self.preview_widget.load_document(self.current_file_path, rasterizer)
+        selected_pages = self._get_selected_pages()
+        self.preview_widget.load_document(self.current_file_path, rasterizer, page_indices=selected_pages)
 
     def _update_queue_ui(self):
         """Updates the separate PrintQueueDialog and the status bar indicator."""
@@ -405,7 +523,12 @@ class MainWindow(QMainWindow):
         rasterizer = self._get_current_rasterizer()
         copies = self.spin_copies.value()
         reverse_order = bool(self.combo_order.currentData())
-        total_pages = self.imported_doc_pages or 1
+        selected_pages = self._get_selected_pages()
+        if not selected_pages:
+            QMessageBox.warning(self, "Peringatan", "Tidak ada halaman yang dipilih untuk dicetak.")
+            return
+
+        total_pages = len(selected_pages)
 
         # Enqueue job
         job = self.queue_manager.add_job(
@@ -414,6 +537,7 @@ class MainWindow(QMainWindow):
             copies=copies,
             total_pages=total_pages,
             reverse_order=reverse_order,
+            pages=selected_pages,
         )
 
         self._update_queue_ui()
@@ -445,6 +569,7 @@ class MainWindow(QMainWindow):
             reverse_order=job.reverse_order,
             usb_device=self.usb_device,
             job_id=job.job_id,
+            pages=job.pages,
         )
         self.active_print_worker.progress_updated.connect(self._on_print_progress)
         self.active_print_worker.job_finished.connect(self._on_print_finished)

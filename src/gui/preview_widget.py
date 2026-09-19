@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtCore import Qt
-from typing import Optional
+from typing import Optional, List
 from PIL import Image
 
 from ..core.rasterizer import DocumentRasterizer
@@ -40,6 +40,7 @@ class PreviewWidget(QGroupBox):
         self.rasterizer: Optional[DocumentRasterizer] = None
         self.current_page: int = 0
         self.total_pages: int = 0
+        self.page_indices: Optional[List[int]] = None
         self.zoom_factor: float = 1.0
         self.base_pixmap: Optional[QPixmap] = None
 
@@ -120,15 +121,27 @@ class PreviewWidget(QGroupBox):
 
         layout.addLayout(nav_layout)
 
-    def load_document(self, file_path: str, rasterizer: DocumentRasterizer):
-        """Loads and renders the first page of the document."""
+    def load_document(self, file_path: str, rasterizer: DocumentRasterizer, page_indices: Optional[List[int]] = None):
+        """Loads and renders the document with optional page subset."""
+        is_same_file = (self.current_file == file_path)
         self.current_file = file_path
         self.rasterizer = rasterizer
-        self.current_page = 0
-        self.zoom_factor = 1.0
+        if not is_same_file:
+            self.current_page = 0
+            self.zoom_factor = 1.0
 
         try:
-            self.total_pages = rasterizer.get_page_count(file_path)
+            doc_pages = rasterizer.get_page_count(file_path)
+            if page_indices is not None and len(page_indices) > 0:
+                self.page_indices = page_indices
+                self.total_pages = len(page_indices)
+            else:
+                self.page_indices = list(range(doc_pages))
+                self.total_pages = doc_pages
+
+            if self.current_page >= self.total_pages:
+                self.current_page = max(0, self.total_pages - 1)
+
             self._render_current_page()
             self.btn_zoom_in.setEnabled(True)
             self.btn_zoom_out.setEnabled(True)
@@ -144,14 +157,26 @@ class PreviewWidget(QGroupBox):
             self.btn_fit.setEnabled(False)
             self.btn_1to1.setEnabled(False)
 
+    def set_page_indices(self, page_indices: List[int]):
+        """Updates active subset of pages without resetting entire document."""
+        if not page_indices or not self.current_file:
+            return
+        self.page_indices = page_indices
+        self.total_pages = len(page_indices)
+        if self.current_page >= self.total_pages:
+            self.current_page = max(0, self.total_pages - 1)
+        self._render_current_page()
+
     def _render_current_page(self):
         """Renders page via rasterizer and displays in canvas."""
         if not self.current_file or not self.rasterizer:
             return
 
+        actual_page = self.page_indices[self.current_page] if self.page_indices else self.current_page
+
         # Render preview at moderate DPI for smooth UI performance
         pil_img = self.rasterizer.render_preview_pixmap(
-            self.current_file, page_number=self.current_page, preview_dpi=120
+            self.current_file, page_number=actual_page, preview_dpi=120
         )
         self.base_pixmap = pil_to_qpixmap(pil_img)
         self._apply_zoom()

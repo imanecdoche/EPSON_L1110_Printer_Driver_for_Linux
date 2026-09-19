@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import os
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from ..core.rasterizer import DocumentRasterizer
 from ..core.usb_device import EpsonUSBDevice
@@ -33,6 +33,7 @@ class PrintJobWorker(QThread):
         usb_device: Optional[EpsonUSBDevice] = None,
         cups_printer: str = "EPSON-L1110-Series",
         job_id: str = "#1",
+        pages: Optional[List[int]] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -43,6 +44,7 @@ class PrintJobWorker(QThread):
         self.usb_device = usb_device
         self.cups_printer = cups_printer
         self.job_id = job_id
+        self.pages = pages
         self._is_cancelled = False
 
     def cancel(self):
@@ -60,7 +62,9 @@ class PrintJobWorker(QThread):
             # 1. Generate ESC/P-R binary print job
             order_desc = "Belakang ke Depan (Reverse)" if self.reverse_order else "Depan ke Belakang (Normal)"
             self.progress_updated.emit(self.job_id, 30, f"Merender halaman [{order_desc}] dan kompresi PackBits...")
-            job_bytes = self.rasterizer.generate_print_job(self.file_path, reverse_order=self.reverse_order)
+            job_bytes = self.rasterizer.generate_print_job(
+                self.file_path, pages=self.pages, reverse_order=self.reverse_order
+            )
 
             if self._is_cancelled:
                 self.job_finished.emit(self.job_id, False, "Tugas cetak dibatalkan oleh pengguna.")

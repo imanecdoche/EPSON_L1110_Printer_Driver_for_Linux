@@ -10,7 +10,7 @@ from .escpr_protocol import (
     PAPER_SIZES,
     packbits_encode,
 )
-from .rasterizer import DocumentRasterizer
+from .rasterizer import DocumentRasterizer, parse_page_selection
 from .maintenance import MaintenanceController
 from .print_queue import PrintQueueManager, PrintJob, JobStatus
 
@@ -26,9 +26,11 @@ __all__ = [
     "PAPER_SIZES",
     "packbits_encode",
     "DocumentRasterizer",
+    "parse_page_selection",
     "MaintenanceController",
     "PrintQueueManager",
     "PrintJob",
     "JobStatus",
 ]
+
 

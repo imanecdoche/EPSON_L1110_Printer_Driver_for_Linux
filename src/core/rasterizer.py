@@ -34,11 +34,13 @@ class DocumentRasterizer:
         resolution: Resolution = Resolution.NORMAL_720,
         media: MediaType = MediaType.PLAIN_PAPER,
         color_mode: ColorMode = ColorMode.COLOR_CMYK,
+        margins_mm: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),  # (top, bottom, left, right)
     ):
         self.paper = paper
         self.resolution = resolution
         self.media = media
         self.color_mode = color_mode
+        self.margins_mm = margins_mm
         self.builder = ESCPRBuilder(paper, resolution, media, color_mode)
 
     @property
@@ -60,11 +62,16 @@ class DocumentRasterizer:
             raise ValueError(f"Unsupported file format: {ext}")
 
     def render_page_image(
-        self, file_path: str, page_number: int = 0, dpi: Optional[int] = None
+        self,
+        file_path: str,
+        page_number: int = 0,
+        dpi: Optional[int] = None,
+        margins_mm: Optional[Tuple[float, float, float, float]] = None,
     ) -> Image.Image:
         """
         Renders a specific page of a PDF or image into a PIL Image.
-        Scales to the physical paper size maintaining aspect ratio, centered on page.
+        Scales to the physical paper size maintaining aspect ratio,
+        bounded and positioned by individual custom margins (top, bottom, left, right).
         """
         effective_dpi = dpi or self.resolution.value
         page_w_px, page_h_px = self.paper.pixels(effective_dpi)
@@ -93,24 +100,37 @@ class DocumentRasterizer:
         # Create blank canvas matching exact physical paper dimensions
         canvas = Image.new("RGB", (page_w_px, page_h_px), color=(255, 255, 255))
 
-        # Calculate best-fit dimensions maintaining aspect ratio
-        img_ratio = img.width / img.height
-        canvas_ratio = page_w_px / page_h_px
+        # Margin calculation in pixels (1 inch = 25.4 mm)
+        cur_margins = margins_mm if margins_mm is not None else self.margins_mm
+        top_mm, bottom_mm, left_mm, right_mm = cur_margins
 
-        if img_ratio > canvas_ratio:
+        top_px = int(round((max(0.0, float(top_mm)) / 25.4) * effective_dpi))
+        bottom_px = int(round((max(0.0, float(bottom_mm)) / 25.4) * effective_dpi))
+        left_px = int(round((max(0.0, float(left_mm)) / 25.4) * effective_dpi))
+        right_px = int(round((max(0.0, float(right_mm)) / 25.4) * effective_dpi))
+
+        # Calculate usable printable bounds
+        printable_w = max(20, page_w_px - left_px - right_px)
+        printable_h = max(20, page_h_px - top_px - bottom_px)
+
+        # Calculate best-fit dimensions maintaining aspect ratio within printable bounds
+        img_ratio = img.width / img.height
+        printable_ratio = printable_w / printable_h
+
+        if img_ratio > printable_ratio:
             # Fit to width
-            scaled_w = page_w_px
-            scaled_h = int(round(page_w_px / img_ratio))
+            scaled_w = printable_w
+            scaled_h = int(round(printable_w / img_ratio))
         else:
             # Fit to height
-            scaled_h = page_h_px
-            scaled_w = int(round(page_h_px * img_ratio))
+            scaled_h = printable_h
+            scaled_w = int(round(printable_h * img_ratio))
 
         scaled_img = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
 
-        # Center on canvas
-        pos_x = (page_w_px - scaled_w) // 2
-        pos_y = (page_h_px - scaled_h) // 2
+        # Position within bounded margin area
+        pos_x = left_px + (printable_w - scaled_w) // 2
+        pos_y = top_px + (printable_h - scaled_h) // 2
         canvas.paste(scaled_img, (pos_x, pos_y))
 
         return canvas
@@ -167,3 +187,65 @@ class DocumentRasterizer:
             job_data.extend(self.builder.generate_footer())
 
         return bytes(job_data)
+
+
+def parse_page_selection(
+    mode: str,
+    custom_str: str,
+    total_pages: int,
+) -> List[int]:
+    """
+    Parses page selection criteria into 0-indexed list of page indices.
+    - 'all': all pages
+    - 'odd': pages 1, 3, 5, ...
+    - 'even': pages 2, 4, 6, ...
+    - 'custom': parsed from comma-separated ranges e.g. "1, 3, 5-8"
+    """
+    if total_pages <= 0:
+        return []
+
+    if mode == "all":
+        return list(range(total_pages))
+    elif mode == "odd":
+        return [i for i in range(total_pages) if (i + 1) % 2 != 0]
+    elif mode == "even":
+        return [i for i in range(total_pages) if (i + 1) % 2 == 0]
+    elif mode == "custom":
+        if not custom_str or not custom_str.strip():
+            return list(range(total_pages))
+
+        chosen: List[int] = []
+        chunks = custom_str.replace(" ", "").split(",")
+        for chunk in chunks:
+            if not chunk:
+                continue
+            if "-" in chunk:
+                parts = chunk.split("-")
+                if len(parts) == 2:
+                    try:
+                        start = int(parts[0])
+                        end = int(parts[1])
+                        if start <= end:
+                            for p in range(start, end + 1):
+                                if 1 <= p <= total_pages:
+                                    chosen.append(p - 1)
+                        else:
+                            for p in range(start, end - 1, -1):
+                                if 1 <= p <= total_pages:
+                                    chosen.append(p - 1)
+                    except ValueError:
+                        pass
+            else:
+                try:
+                    p = int(chunk)
+                    if 1 <= p <= total_pages:
+                        chosen.append(p - 1)
+                except ValueError:
+                    pass
+
+        # Deduplicate while preserving order
+        unique_chosen = list(dict.fromkeys(chosen))
+        return unique_chosen if unique_chosen else list(range(total_pages))
+
+    return list(range(total_pages))
+
