@@ -3,6 +3,7 @@ from .main_window import MainWindow
 from .cleaning_dialog import HeadCleaningDialog
 from .ink_widget import InkLevelWidget
 from .preview_widget import PreviewWidget
-from .queue_widget import PrintQueueWidget
+from .queue_widget import PrintQueueWidget, PrintQueueDialog
 
-__all__ = ["MainWindow", "HeadCleaningDialog", "InkLevelWidget", "PreviewWidget", "PrintQueueWidget"]
+__all__ = ["MainWindow", "HeadCleaningDialog", "InkLevelWidget", "PreviewWidget", "PrintQueueWidget", "PrintQueueDialog"]
+

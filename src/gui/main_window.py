@@ -41,7 +41,7 @@ from ..core.ink_tracker import InkTracker
 from ..core.print_queue import PrintQueueManager, JobStatus, PrintJob
 from .ink_widget import InkLevelWidget
 from .preview_widget import PreviewWidget
-from .queue_widget import PrintQueueWidget
+from .queue_widget import PrintQueueDialog
 from .worker_thread import PrintJobWorker, MaintenanceWorker
 from .cleaning_dialog import HeadCleaningDialog
 
@@ -52,8 +52,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Epson EcoTank L1110 — Control Center & Driver")
-        self.resize(1180, 740)
-        self.setMinimumSize(1000, 650)
+        self.resize(1150, 720)
+        self.setMinimumSize(950, 600)
 
         # Core controllers
         self.maintenance_controller = MaintenanceController()
@@ -64,6 +64,12 @@ class MainWindow(QMainWindow):
         self.imported_doc_pages: int = 0
         self.active_print_worker: Optional[PrintJobWorker] = None
         self.active_maint_worker: Optional[MaintenanceWorker] = None
+
+        # Print Queue Dialog (separate window)
+        self.queue_dialog = PrintQueueDialog(self)
+        self.queue_dialog.cancel_requested.connect(self._on_cancel_job_requested)
+        self.queue_dialog.clear_requested.connect(self._on_clear_queue_requested)
+        self.queue_dialog.refresh_requested.connect(self._sync_queue_status)
 
         self._init_usb_connection()
         self._setup_ui()
@@ -214,23 +220,10 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(panel_left)
 
         # -------------------------------------------------------------
-        # 2. CENTER PANEL: Document Preview Canvas & Print Queue
+        # 2. CENTER PANEL: Document Preview Canvas
         # -------------------------------------------------------------
-        center_widget = QWidget()
-        center_layout = QVBoxLayout(center_widget)
-        center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(8)
-
         self.preview_widget = PreviewWidget()
-        center_layout.addWidget(self.preview_widget, stretch=5)
-
-        self.queue_widget = PrintQueueWidget()
-        self.queue_widget.cancel_requested.connect(self._on_cancel_job_requested)
-        self.queue_widget.clear_requested.connect(self._on_clear_queue_requested)
-        self.queue_widget.refresh_requested.connect(self._sync_queue_status)
-        center_layout.addWidget(self.queue_widget, stretch=3)
-
-        main_layout.addWidget(center_widget, stretch=1)
+        main_layout.addWidget(self.preview_widget, stretch=1)
 
         # -------------------------------------------------------------
         # 3. RIGHT PANEL: Status & Maintenance
@@ -254,6 +247,11 @@ class MainWindow(QMainWindow):
         self.lbl_conn_status = QLabel(conn_text)
         self.lbl_conn_status.setStyleSheet("color: #2e7d32; font-size: 12px;")
         status_box.addWidget(self.lbl_conn_status)
+
+        self.btn_open_queue = QPushButton("Lihat Antrean Cetak...")
+        self.btn_open_queue.setToolTip("Buka jendela antrean cetak (Print Queue)")
+        self.btn_open_queue.clicked.connect(self._open_print_queue_dialog)
+        status_box.addWidget(self.btn_open_queue)
 
         right_layout.addWidget(grp_status)
 
@@ -294,6 +292,24 @@ class MainWindow(QMainWindow):
         # -------------------------------------------------------------
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+
+        self.btn_status_queue = QPushButton("Antrean: 0")
+        self.btn_status_queue.setToolTip("Buka jendela antrean cetak")
+        self.btn_status_queue.setStyleSheet("""
+            QPushButton {
+                background-color: #f0f2f5;
+                border: 1px solid #d0d7de;
+                border-radius: 3px;
+                padding: 2px 8px;
+                font-size: 11px;
+                color: #24292f;
+            }
+            QPushButton:hover {
+                background-color: #e1e4e8;
+            }
+        """)
+        self.btn_status_queue.clicked.connect(self._open_print_queue_dialog)
+        self.status_bar.addPermanentWidget(self.btn_status_queue)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedWidth(200)
@@ -365,6 +381,22 @@ class MainWindow(QMainWindow):
         rasterizer = self._get_current_rasterizer()
         self.preview_widget.load_document(self.current_file_path, rasterizer)
 
+    def _update_queue_ui(self):
+        """Updates the separate PrintQueueDialog and the status bar indicator."""
+        self.queue_dialog.update_queue(self.queue_manager.jobs)
+        active_jobs = [
+            j for j in self.queue_manager.jobs
+            if j.status in (JobStatus.QUEUED, JobStatus.RASTERIZING, JobStatus.PRINTING)
+        ]
+        self.btn_status_queue.setText(f"Antrean: {len(active_jobs)}")
+
+    def _open_print_queue_dialog(self):
+        """Opens the separate Print Queue dialog window."""
+        self._update_queue_ui()
+        self.queue_dialog.show()
+        self.queue_dialog.raise_()
+        self.queue_dialog.activateWindow()
+
     def _start_print_job(self):
         """Enqueues document print job and triggers processing."""
         if not self.current_file_path:
@@ -384,7 +416,7 @@ class MainWindow(QMainWindow):
             reverse_order=reverse_order,
         )
 
-        self.queue_widget.update_queue(self.queue_manager.jobs)
+        self._update_queue_ui()
         self.status_bar.showMessage(f"Tugas cetak {job.job_id} ({job.file_name}) ditambahkan ke antrean.")
 
         # Process next in queue
@@ -401,7 +433,7 @@ class MainWindow(QMainWindow):
 
         job.status = JobStatus.RASTERIZING
         job.progress = 5
-        self.queue_widget.update_queue(self.queue_manager.jobs)
+        self._update_queue_ui()
 
         self.progress_bar.setValue(5)
         self.progress_bar.setVisible(True)
@@ -436,7 +468,7 @@ class MainWindow(QMainWindow):
                     j.status = JobStatus.RASTERIZING
                 j.status_detail = msg
                 break
-        self.queue_widget.update_queue(self.queue_manager.jobs)
+        self._update_queue_ui()
 
     def _on_print_finished(self, job_id: str, success: bool, msg: str):
         self.progress_bar.setVisible(False)
@@ -451,7 +483,7 @@ class MainWindow(QMainWindow):
                 j.status_detail = msg
                 break
 
-        self.queue_widget.update_queue(self.queue_manager.jobs)
+        self._update_queue_ui()
 
         if success and finished_job:
             # Deduct ink dynamically based on printed page volume
@@ -478,20 +510,20 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage(f"Membatalkan tugas aktif {job_id}...")
 
         cancelled_job = self.queue_manager.cancel_job(job_id)
-        self.queue_widget.update_queue(self.queue_manager.jobs)
+        self._update_queue_ui()
         if cancelled_job:
             self.status_bar.showMessage(f"Tugas cetak {job_id} ({cancelled_job.file_name}) dibatalkan.")
 
     def _on_clear_queue_requested(self):
         """Cleans up completed, cancelled, and failed jobs from queue view."""
         self.queue_manager.clear_finished()
-        self.queue_widget.update_queue(self.queue_manager.jobs)
+        self._update_queue_ui()
         self.status_bar.showMessage("Riwayat tugas selesai/dibatalkan telah dibersihkan.")
 
     def _sync_queue_status(self):
         """Periodically polls CUPS spooler to sync external jobs."""
         self.queue_manager.sync_cups_jobs()
-        self.queue_widget.update_queue(self.queue_manager.jobs)
+        self._update_queue_ui()
 
     def _trigger_maintenance(self, action: str):
         """Executes maintenance action."""

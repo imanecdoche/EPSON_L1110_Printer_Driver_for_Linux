@@ -1,11 +1,11 @@
 """
-Print Queue Widget for Epson L1110 Control Center.
-Displays active, waiting, and completed print jobs in a clean, functional table.
+Dedicated Print Queue Dialog for Epson L1110 Control Center.
+Displays active, waiting, and completed print jobs in a separate, clean window.
 Strictly adheres to workspace rules (no badges/tags/pills, native widgets only).
 """
 
 from PyQt6.QtWidgets import (
-    QGroupBox,
+    QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QTableWidget,
@@ -22,19 +22,22 @@ from typing import List
 from ..core.print_queue import PrintJob, JobStatus
 
 
-class PrintQueueWidget(QGroupBox):
-    """Functional print queue monitor and management interface."""
+class PrintQueueDialog(QDialog):
+    """Separate dedicated window/dialog for Print Queue."""
 
     cancel_requested = pyqtSignal(str)   # emits job_id
     clear_requested = pyqtSignal()
     refresh_requested = pyqtSignal()
 
     def __init__(self, parent=None):
-        super().__init__("Antrean Cetak (Print Queue)", parent)
+        super().__init__(parent)
+        self.setWindowTitle("Antrean Cetak (Print Queue) — Epson EcoTank L1110")
+        self.resize(720, 360)
+        self.setMinimumSize(580, 260)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 12, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
 
         # 1. Jobs Table
         self.table = QTableWidget()
@@ -58,7 +61,7 @@ class PrintQueueWidget(QGroupBox):
                 background-color: #f0f2f5;
                 color: #24292f;
                 font-weight: bold;
-                padding: 4px 6px;
+                padding: 6px 8px;
                 border: 1px solid #d0d7de;
                 font-size: 12px;
             }
@@ -79,7 +82,7 @@ class PrintQueueWidget(QGroupBox):
         bottom_layout.setSpacing(8)
 
         self.lbl_summary = QLabel("Antrean: 0 tugas aktif")
-        self.lbl_summary.setStyleSheet("color: #555555; font-size: 11px;")
+        self.lbl_summary.setStyleSheet("color: #555555; font-size: 12px;")
         bottom_layout.addWidget(self.lbl_summary)
 
         bottom_layout.addStretch()
@@ -100,6 +103,10 @@ class PrintQueueWidget(QGroupBox):
         self.btn_refresh.clicked.connect(self.refresh_requested.emit)
         bottom_layout.addWidget(self.btn_refresh)
 
+        self.btn_close = QPushButton("Tutup")
+        self.btn_close.clicked.connect(self.close)
+        bottom_layout.addWidget(self.btn_close)
+
         layout.addLayout(bottom_layout)
 
         # Connect selection change
@@ -107,7 +114,6 @@ class PrintQueueWidget(QGroupBox):
 
     def update_queue(self, jobs: List[PrintJob]):
         """Renders the current jobs list into the table."""
-        # Preserve selected job ID if possible
         selected_job_id = self.get_selected_job_id()
 
         self.table.setRowCount(len(jobs))
@@ -138,7 +144,7 @@ class PrintQueueWidget(QGroupBox):
                 if job.status_detail:
                     status_text += f" — {job.status_detail}"
                 item_status = QTableWidgetItem(status_text)
-                item_status.setForeground(QColor("#1a5fb4"))  # Blue
+                item_status.setForeground(QColor("#1a5fb4"))
                 font = item_status.font()
                 font.setBold(True)
                 item_status.setFont(font)
@@ -150,17 +156,17 @@ class PrintQueueWidget(QGroupBox):
                 active_count += 1
             elif job.status == JobStatus.QUEUED:
                 item_status = QTableWidgetItem("Menunggu Antrean")
-                item_status.setForeground(QColor("#a05a00"))  # Amber
+                item_status.setForeground(QColor("#a05a00"))
                 active_count += 1
             elif job.status == JobStatus.COMPLETED:
                 item_status = QTableWidgetItem("Selesai")
-                item_status.setForeground(QColor("#2e7d32"))  # Green
+                item_status.setForeground(QColor("#2e7d32"))
             elif job.status == JobStatus.CANCELLED:
                 item_status = QTableWidgetItem("Dibatalkan")
-                item_status.setForeground(QColor("#777777"))  # Gray
+                item_status.setForeground(QColor("#777777"))
             else:
                 item_status = QTableWidgetItem(f"Gagal: {job.status_detail or 'Error'}")
-                item_status.setForeground(QColor("#c01c28"))  # Red
+                item_status.setForeground(QColor("#c01c28"))
 
             self.table.setItem(row, 0, item_id)
             self.table.setItem(row, 1, item_name)
@@ -192,7 +198,6 @@ class PrintQueueWidget(QGroupBox):
             self.btn_cancel.setEnabled(False)
             return
 
-        # Check status of selected row (column 4)
         selected_rows = self.table.selectionModel().selectedRows()
         if selected_rows:
             status_item = self.table.item(selected_rows[0].row(), 4)
@@ -207,3 +212,7 @@ class PrintQueueWidget(QGroupBox):
         job_id = self.get_selected_job_id()
         if job_id:
             self.cancel_requested.emit(job_id)
+
+
+# Backward compatibility alias
+PrintQueueWidget = PrintQueueDialog
