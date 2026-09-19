@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QLineEdit,
+    QCheckBox,
     QScrollArea,
     QFrame,
     QFileDialog,
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
         self.usb_device: Optional[EpsonUSBDevice] = None
         self.current_file_path: Optional[str] = None
         self.imported_doc_pages: int = 0
+        self.doc_offset_mm: Tuple[float, float] = (0.0, 0.0)
         self.active_print_worker: Optional[PrintJobWorker] = None
         self.active_maint_worker: Optional[MaintenanceWorker] = None
 
@@ -255,6 +257,51 @@ class MainWindow(QMainWindow):
 
         left_layout.addLayout(margin_grid)
 
+        left_layout.addSpacing(4)
+
+        # Document Scaling Mode (Fit to Page, Actual Size, Custom)
+        lbl_scaling = QLabel("<b>Penskalaan (Scaling):</b>")
+        left_layout.addWidget(lbl_scaling)
+        self.combo_scaling = QComboBox()
+        self.combo_scaling.addItem("Pas ke Kertas (Fit to Page)", userData="fit")
+        self.combo_scaling.addItem("Ukuran Asli (Actual Size 1:1)", userData="actual")
+        self.combo_scaling.addItem("Kustom (Custom Scale)", userData="custom")
+        self.combo_scaling.currentIndexChanged.connect(self._on_scaling_changed)
+        left_layout.addWidget(self.combo_scaling)
+
+        # Custom scale factor (step 0.2x, supports negative / minus)
+        scale_box = QHBoxLayout()
+        scale_box.setSpacing(6)
+        scale_box.addWidget(QLabel("Faktor Skala:"))
+        self.spin_scale = QDoubleSpinBox()
+        self.spin_scale.setRange(-5.0, 5.0)
+        self.spin_scale.setSingleStep(0.2)
+        self.spin_scale.setValue(1.0)
+        self.spin_scale.setDecimals(1)
+        self.spin_scale.setSuffix("x")
+        self.spin_scale.setEnabled(False)
+        self.spin_scale.valueChanged.connect(self._on_settings_changed)
+        scale_box.addWidget(self.spin_scale)
+        left_layout.addLayout(scale_box)
+
+        # Snap to Grid & Safe Area Guidelines
+        self.chk_snap = QCheckBox("Snap to Grid & Safe Area")
+        self.chk_snap.setChecked(True)
+        self.chk_snap.toggled.connect(self._on_snap_toggled)
+        left_layout.addWidget(self.chk_snap)
+
+        # Interactive Drag Position display & Reset button
+        pos_box = QHBoxLayout()
+        pos_box.setSpacing(6)
+        self.lbl_doc_position = QLabel("Posisi: X: 0.0, Y: 0.0 mm")
+        self.lbl_doc_position.setStyleSheet("color: #444444; font-size: 11px;")
+        pos_box.addWidget(self.lbl_doc_position, stretch=1)
+        self.btn_reset_pos = QPushButton("Pusatkan")
+        self.btn_reset_pos.setToolTip("Kembalikan posisi dokumen ke tengah area cetak")
+        self.btn_reset_pos.clicked.connect(self._reset_doc_position)
+        pos_box.addWidget(self.btn_reset_pos)
+        left_layout.addLayout(pos_box)
+
         left_layout.addSpacing(6)
 
         # Informative Total Pages to Print Box (Physical pages = doc pages * copies)
@@ -304,6 +351,8 @@ class MainWindow(QMainWindow):
         # 2. CENTER PANEL: Document Preview Canvas
         # -------------------------------------------------------------
         self.preview_widget = PreviewWidget()
+        self.preview_widget.position_offset_changed.connect(self._on_canvas_position_changed)
+        self.preview_widget.position_offset_committed.connect(self._on_canvas_position_committed)
         main_layout.addWidget(self.preview_widget, stretch=1)
 
         # -------------------------------------------------------------
@@ -400,7 +449,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Siap — Sistem siap menerima instruksi cetak.")
 
     def _get_current_rasterizer(self) -> DocumentRasterizer:
-        """Constructs DocumentRasterizer according to selected UI options and custom margins."""
+        """Constructs DocumentRasterizer according to selected UI options, scaling, and custom margins."""
         paper_key = self.combo_paper.currentData()
         paper = PAPER_SIZES.get(paper_key, PAPER_SIZES["F4"])
         dpi = self.combo_dpi.currentData()
@@ -413,12 +462,19 @@ class MainWindow(QMainWindow):
         right = self.spin_margin_right.value() if hasattr(self, "spin_margin_right") else 0.0
         margins_mm = (top, bottom, left, right)
 
+        scaling_mode = self.combo_scaling.currentData() if hasattr(self, "combo_scaling") else "fit"
+        scale_factor = self.spin_scale.value() if hasattr(self, "spin_scale") else 1.0
+        pos_offset = getattr(self, "doc_offset_mm", (0.0, 0.0))
+
         return DocumentRasterizer(
             paper=paper,
             resolution=dpi,
             media=media,
             color_mode=color,
             margins_mm=margins_mm,
+            scaling_mode=scaling_mode,
+            scale_factor=scale_factor,
+            position_offset_mm=pos_offset,
         )
 
     def _get_selected_pages(self) -> List[int]:
@@ -440,12 +496,46 @@ class MainWindow(QMainWindow):
             pages = self._get_selected_pages()
             self.preview_widget.set_page_indices(pages)
 
+    def _on_scaling_changed(self):
+        """Triggered when scaling mode changes."""
+        mode = self.combo_scaling.currentData()
+        self.spin_scale.setEnabled(mode == "custom")
+        self._on_settings_changed()
+
+    def _on_snap_toggled(self, checked: bool):
+        """Toggles magnetic snap-to-grid on preview canvas."""
+        self.preview_widget.set_snap_to_grid(checked)
+
+    def _on_canvas_position_changed(self, x_mm: float, y_mm: float):
+        """Triggered while dragging document in canvas."""
+        self.doc_offset_mm = (x_mm, y_mm)
+        sign_x = "+" if x_mm >= 0 else ""
+        sign_y = "+" if y_mm >= 0 else ""
+        self.lbl_doc_position.setText(f"Posisi: X: {sign_x}{x_mm:.1f}, Y: {sign_y}{y_mm:.1f} mm")
+
+    def _on_canvas_position_committed(self, x_mm: float, y_mm: float):
+        """Triggered when mouse drag is released on canvas."""
+        self._on_canvas_position_changed(x_mm, y_mm)
+        if self.current_file_path:
+            self.preview_widget.rasterizer = self._get_current_rasterizer()
+
+    def _reset_doc_position(self):
+        """Resets document position offset to center (0.0, 0.0 mm)."""
+        self.doc_offset_mm = (0.0, 0.0)
+        self.lbl_doc_position.setText("Posisi: X: 0.0, Y: 0.0 mm")
+        self.preview_widget.set_position_offset(0.0, 0.0)
+        if self.current_file_path:
+            self._update_preview()
+
     def load_file(self, path: str):
         """Loads a document file into the preview and print system."""
         if not path or not os.path.exists(path):
             return
         self.current_file_path = os.path.abspath(path)
         self.lbl_selected_file.setText(os.path.basename(path))
+        self.doc_offset_mm = (0.0, 0.0)
+        self.lbl_doc_position.setText("Posisi: X: 0.0, Y: 0.0 mm")
+        self.preview_widget.set_position_offset(0.0, 0.0)
         rasterizer = self._get_current_rasterizer()
         try:
             self.imported_doc_pages = rasterizer.get_page_count(self.current_file_path)
@@ -487,7 +577,7 @@ class MainWindow(QMainWindow):
             self.btn_print.setEnabled(False)
 
     def _on_settings_changed(self):
-        """Triggered when paper, resolution, or margins change."""
+        """Triggered when paper, resolution, margins, or scaling change."""
         if self.current_file_path:
             self._update_preview()
 

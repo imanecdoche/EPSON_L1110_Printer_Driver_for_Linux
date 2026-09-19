@@ -12,7 +12,7 @@ Supports:
 
 import os
 from typing import List, Tuple, Optional, Generator
-from PIL import Image
+from PIL import Image, ImageOps
 import pymupdf  # Official PyMuPDF import
 
 from .escpr_protocol import (
@@ -35,12 +35,18 @@ class DocumentRasterizer:
         media: MediaType = MediaType.PLAIN_PAPER,
         color_mode: ColorMode = ColorMode.COLOR_CMYK,
         margins_mm: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),  # (top, bottom, left, right)
+        scaling_mode: str = "fit",  # "fit", "actual", "custom"
+        scale_factor: float = 1.0,  # multiplier for custom scaling, supports negative (mirroring)
+        position_offset_mm: Tuple[float, float] = (0.0, 0.0),  # (offset_x_mm, offset_y_mm)
     ):
         self.paper = paper
         self.resolution = resolution
         self.media = media
         self.color_mode = color_mode
         self.margins_mm = margins_mm
+        self.scaling_mode = scaling_mode
+        self.scale_factor = scale_factor
+        self.position_offset_mm = position_offset_mm
         self.builder = ESCPRBuilder(paper, resolution, media, color_mode)
 
     @property
@@ -61,43 +67,75 @@ class DocumentRasterizer:
         else:
             raise ValueError(f"Unsupported file format: {ext}")
 
+    def get_document_page_size_mm(self, file_path: str, page_number: int = 0) -> Tuple[float, float]:
+        """Returns physical dimensions of the source page in millimeters (width_mm, height_mm)."""
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".pdf":
+            try:
+                doc = pymupdf.open(file_path)
+                if page_number < 0 or page_number >= len(doc):
+                    page_number = 0
+                page = doc[page_number]
+                w_mm = (page.rect.width / 72.0) * 25.4
+                h_mm = (page.rect.height / 72.0) * 25.4
+                doc.close()
+                return (w_mm, h_mm)
+            except Exception:
+                return (210.0, 297.0)
+        elif ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"]:
+            try:
+                with Image.open(file_path) as img:
+                    dpi = img.info.get("dpi", (300.0, 300.0))
+                    dpi_x = float(dpi[0]) if dpi and float(dpi[0]) > 10 else 300.0
+                    dpi_y = float(dpi[1]) if dpi and float(dpi[1]) > 10 else 300.0
+                    w_mm = (img.width / dpi_x) * 25.4
+                    h_mm = (img.height / dpi_y) * 25.4
+                    return (w_mm, h_mm)
+            except Exception:
+                return (210.0, 297.0)
+        return (210.0, 297.0)
+
+    def get_raw_page_image(self, file_path: str, page_number: int = 0, dpi: int = 150) -> Image.Image:
+        """Extracts and renders unplaced source page image at requested DPI."""
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".pdf":
+            doc = pymupdf.open(file_path)
+            if page_number < 0 or page_number >= len(doc):
+                doc.close()
+                raise IndexError(f"Page {page_number} out of range (total {len(doc)})")
+            page = doc[page_number]
+            zoom = dpi / 72.0
+            mat = pymupdf.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            doc.close()
+            return img
+        elif ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"]:
+            return Image.open(file_path).convert("RGB")
+        else:
+            raise ValueError(f"Unsupported file extension: {ext}")
+
     def render_page_image(
         self,
         file_path: str,
         page_number: int = 0,
         dpi: Optional[int] = None,
         margins_mm: Optional[Tuple[float, float, float, float]] = None,
+        scaling_mode: Optional[str] = None,
+        scale_factor: Optional[float] = None,
+        position_offset_mm: Optional[Tuple[float, float]] = None,
     ) -> Image.Image:
         """
-        Renders a specific page of a PDF or image into a PIL Image.
-        Scales to the physical paper size maintaining aspect ratio,
-        bounded and positioned by individual custom margins (top, bottom, left, right).
+        Renders a specific page of a PDF or image into a PIL Image on the physical paper canvas.
+        Handles individual 4-sided margins, scaling (fit, actual, custom with +/- step 0.2x),
+        and interactive drag position offset.
         """
         effective_dpi = dpi or self.resolution.value
         page_w_px, page_h_px = self.paper.pixels(effective_dpi)
 
-        ext = os.path.splitext(file_path)[1].lower()
+        img = self.get_raw_page_image(file_path, page_number=page_number, dpi=effective_dpi)
 
-        if ext == ".pdf":
-            doc = pymupdf.open(file_path)
-            if page_number < 0 or page_number >= len(doc):
-                doc.close()
-                raise IndexError(f"Page {page_number} out of range (total {len(doc)})")
-
-            page = doc[page_number]
-            # Calculate zoom matrix to match target DPI (PDF base is 72 dpi)
-            zoom = effective_dpi / 72.0
-            mat = pymupdf.Matrix(zoom, zoom)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            doc.close()
-
-        elif ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"]:
-            img = Image.open(file_path).convert("RGB")
-        else:
-            raise ValueError(f"Unsupported file extension: {ext}")
-
-        # Create blank canvas matching exact physical paper dimensions
+        # Blank canvas matching exact physical paper dimensions
         canvas = Image.new("RGB", (page_w_px, page_h_px), color=(255, 255, 255))
 
         # Margin calculation in pixels (1 inch = 25.4 mm)
@@ -109,30 +147,58 @@ class DocumentRasterizer:
         left_px = int(round((max(0.0, float(left_mm)) / 25.4) * effective_dpi))
         right_px = int(round((max(0.0, float(right_mm)) / 25.4) * effective_dpi))
 
-        # Calculate usable printable bounds
+        # Usable printable bounds within margins
         printable_w = max(20, page_w_px - left_px - right_px)
         printable_h = max(20, page_h_px - top_px - bottom_px)
 
-        # Calculate best-fit dimensions maintaining aspect ratio within printable bounds
-        img_ratio = img.width / img.height
+        cur_mode = scaling_mode or self.scaling_mode
+        cur_scale = scale_factor if scale_factor is not None else self.scale_factor
+
+        # Determine dimensions of source page
+        actual_w = img.width
+        actual_h = img.height
+        img_ratio = actual_w / actual_h
         printable_ratio = printable_w / printable_h
 
-        if img_ratio > printable_ratio:
-            # Fit to width
-            scaled_w = printable_w
-            scaled_h = int(round(printable_w / img_ratio))
+        if cur_mode == "fit":
+            # Scale proportionally to fit inside printable bounds
+            if img_ratio > printable_ratio:
+                scaled_w = printable_w
+                scaled_h = max(10, int(round(printable_w / img_ratio)))
+            else:
+                scaled_h = printable_h
+                scaled_w = max(10, int(round(printable_h * img_ratio)))
+        elif cur_mode == "actual":
+            # 1:1 Actual physical size
+            scaled_w = max(10, actual_w)
+            scaled_h = max(10, actual_h)
+        elif cur_mode == "custom":
+            # Custom multiplier (step 0.2x, supports negative values)
+            mult = abs(cur_scale) if abs(cur_scale) >= 0.05 else 0.2
+            scaled_w = max(10, int(round(actual_w * mult)))
+            scaled_h = max(10, int(round(actual_h * mult)))
         else:
-            # Fit to height
-            scaled_h = printable_h
-            scaled_w = int(round(printable_h * img_ratio))
+            scaled_w = printable_w
+            scaled_h = max(10, int(round(printable_w / img_ratio)))
 
         scaled_img = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
 
-        # Position within bounded margin area
-        pos_x = left_px + (printable_w - scaled_w) // 2
-        pos_y = top_px + (printable_h - scaled_h) // 2
-        canvas.paste(scaled_img, (pos_x, pos_y))
+        # Support negative scale factor (mirror / horizontal flip)
+        if cur_mode == "custom" and cur_scale < 0:
+            scaled_img = ImageOps.mirror(scaled_img)
 
+        # Positioning: centered in printable area + position_offset_mm
+        cur_offset = position_offset_mm if position_offset_mm is not None else self.position_offset_mm
+        offset_x_px = int(round((cur_offset[0] / 25.4) * effective_dpi))
+        offset_y_px = int(round((cur_offset[1] / 25.4) * effective_dpi))
+
+        base_x = left_px + (printable_w - scaled_w) // 2
+        base_y = top_px + (printable_h - scaled_h) // 2
+
+        pos_x = base_x + offset_x_px
+        pos_y = base_y + offset_y_px
+
+        canvas.paste(scaled_img, (pos_x, pos_y))
         return canvas
 
     def render_preview_pixmap(self, file_path: str, page_number: int = 0, preview_dpi: int = 150) -> Image.Image:
