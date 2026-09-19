@@ -312,21 +312,28 @@ class MainWindow(QMainWindow):
 
         return DocumentRasterizer(paper=paper, resolution=dpi, media=media, color_mode=color)
 
+    def load_file(self, path: str):
+        """Loads a document file into the preview and print system."""
+        if not path or not os.path.exists(path):
+            return
+        self.current_file_path = os.path.abspath(path)
+        self.lbl_selected_file.setText(os.path.basename(path))
+        self.btn_print.setEnabled(True)
+        rasterizer = self._get_current_rasterizer()
+        try:
+            self.imported_doc_pages = rasterizer.get_page_count(self.current_file_path)
+        except Exception:
+            self.imported_doc_pages = 1
+        self._update_total_print_pages_label()
+        self._update_preview()
+
     def _select_file(self):
         """Open file dialog for PDF and image documents."""
         file_filter = "Dokumen Cetak (*.pdf *.png *.jpg *.jpeg *.bmp *.tiff);;Berkas PDF (*.pdf);;Gambar (*.png *.jpg *.jpeg)"
         path, _ = QFileDialog.getOpenFileName(self, "Pilih Berkas Dokumen", "", file_filter)
         if path:
-            self.current_file_path = path
-            self.lbl_selected_file.setText(os.path.basename(path))
-            self.btn_print.setEnabled(True)
-            rasterizer = self._get_current_rasterizer()
-            try:
-                self.imported_doc_pages = rasterizer.get_page_count(path)
-            except Exception:
-                self.imported_doc_pages = 1
-            self._update_total_print_pages_label()
-            self._update_preview()
+            self.load_file(path)
+
 
     def _update_total_print_pages_label(self):
         """Calculates and displays total physical pages to be printed (doc pages * copies)."""

@@ -26,6 +26,8 @@ def main():
     app.setFont(font)
 
     window = MainWindow()
+    if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
+        window.load_file(sys.argv[1])
     window.show()
 
     sys.exit(app.exec())
