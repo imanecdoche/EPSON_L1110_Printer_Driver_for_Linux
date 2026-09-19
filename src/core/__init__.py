@@ -12,6 +12,7 @@ from .escpr_protocol import (
 )
 from .rasterizer import DocumentRasterizer
 from .maintenance import MaintenanceController
+from .print_queue import PrintQueueManager, PrintJob, JobStatus
 
 __all__ = [
     "EpsonUSBDevice",
@@ -26,4 +27,8 @@ __all__ = [
     "packbits_encode",
     "DocumentRasterizer",
     "MaintenanceController",
+    "PrintQueueManager",
+    "PrintJob",
+    "JobStatus",
 ]
+

@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QStatusBar,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from typing import Optional
 
 from ..core.escpr_protocol import (
@@ -38,8 +38,10 @@ from ..core.rasterizer import DocumentRasterizer
 from ..core.maintenance import MaintenanceController
 from ..core.usb_device import EpsonUSBDevice
 from ..core.ink_tracker import InkTracker
+from ..core.print_queue import PrintQueueManager, JobStatus, PrintJob
 from .ink_widget import InkLevelWidget
 from .preview_widget import PreviewWidget
+from .queue_widget import PrintQueueWidget
 from .worker_thread import PrintJobWorker, MaintenanceWorker
 from .cleaning_dialog import HeadCleaningDialog
 
@@ -50,12 +52,13 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Epson EcoTank L1110 — Control Center & Driver")
-        self.resize(1150, 720)
-        self.setMinimumSize(950, 600)
+        self.resize(1180, 740)
+        self.setMinimumSize(1000, 650)
 
         # Core controllers
         self.maintenance_controller = MaintenanceController()
         self.ink_tracker = InkTracker()
+        self.queue_manager = PrintQueueManager()
         self.usb_device: Optional[EpsonUSBDevice] = None
         self.current_file_path: Optional[str] = None
         self.imported_doc_pages: int = 0
@@ -64,6 +67,11 @@ class MainWindow(QMainWindow):
 
         self._init_usb_connection()
         self._setup_ui()
+
+        # Background timer for CUPS queue synchronization
+        self.queue_timer = QTimer(self)
+        self.queue_timer.timeout.connect(self._sync_queue_status)
+        self.queue_timer.start(3000)
 
     def _init_usb_connection(self):
         """Attempts to discover USB printer."""
@@ -206,10 +214,23 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(panel_left)
 
         # -------------------------------------------------------------
-        # 2. CENTER PANEL: Document Preview Canvas
+        # 2. CENTER PANEL: Document Preview Canvas & Print Queue
         # -------------------------------------------------------------
+        center_widget = QWidget()
+        center_layout = QVBoxLayout(center_widget)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(8)
+
         self.preview_widget = PreviewWidget()
-        main_layout.addWidget(self.preview_widget, stretch=1)
+        center_layout.addWidget(self.preview_widget, stretch=5)
+
+        self.queue_widget = PrintQueueWidget()
+        self.queue_widget.cancel_requested.connect(self._on_cancel_job_requested)
+        self.queue_widget.clear_requested.connect(self._on_clear_queue_requested)
+        self.queue_widget.refresh_requested.connect(self._sync_queue_status)
+        center_layout.addWidget(self.queue_widget, stretch=3)
+
+        main_layout.addWidget(center_widget, stretch=1)
 
         # -------------------------------------------------------------
         # 3. RIGHT PANEL: Status & Maintenance
@@ -338,25 +359,53 @@ class MainWindow(QMainWindow):
         self.preview_widget.load_document(self.current_file_path, rasterizer)
 
     def _start_print_job(self):
-        """Dispatches print job to asynchronous background thread."""
+        """Enqueues document print job and triggers processing."""
         if not self.current_file_path:
             return
 
         rasterizer = self._get_current_rasterizer()
         copies = self.spin_copies.value()
         reverse_order = bool(self.combo_order.currentData())
+        total_pages = self.imported_doc_pages or 1
 
-        # UI state
-        self.btn_print.setEnabled(False)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setVisible(True)
-
-        self.active_print_worker = PrintJobWorker(
+        # Enqueue job
+        job = self.queue_manager.add_job(
             file_path=self.current_file_path,
             rasterizer=rasterizer,
             copies=copies,
+            total_pages=total_pages,
             reverse_order=reverse_order,
+        )
+
+        self.queue_widget.update_queue(self.queue_manager.jobs)
+        self.status_bar.showMessage(f"Tugas cetak {job.job_id} ({job.file_name}) ditambahkan ke antrean.")
+
+        # Process next in queue
+        self._process_next_job()
+
+    def _process_next_job(self):
+        """Executes the next waiting job in the queue if worker is idle."""
+        if self.active_print_worker and self.active_print_worker.isRunning():
+            return  # Printer is busy with active job
+
+        job = self.queue_manager.get_next_queued_job()
+        if not job:
+            return
+
+        job.status = JobStatus.RASTERIZING
+        job.progress = 5
+        self.queue_widget.update_queue(self.queue_manager.jobs)
+
+        self.progress_bar.setValue(5)
+        self.progress_bar.setVisible(True)
+
+        self.active_print_worker = PrintJobWorker(
+            file_path=job.file_path,
+            rasterizer=job.rasterizer,
+            copies=job.copies,
+            reverse_order=job.reverse_order,
             usb_device=self.usb_device,
+            job_id=job.job_id,
         )
         self.active_print_worker.progress_updated.connect(self._on_print_progress)
         self.active_print_worker.job_finished.connect(self._on_print_finished)
@@ -367,29 +416,75 @@ class MainWindow(QMainWindow):
         self.ink_tracker.set_levels(bk, c, m, y)
         self.status_bar.showMessage(f"Level tangki tinta dikalibrasi: BK {bk}%, C {c}%, M {m}%, Y {y}%")
 
-    def _on_print_progress(self, percent: int, msg: str):
+    def _on_print_progress(self, job_id: str, percent: int, msg: str):
         self.progress_bar.setValue(percent)
-        self.status_bar.showMessage(msg)
+        self.status_bar.showMessage(f"[{job_id}] {msg}")
 
-    def _on_print_finished(self, success: bool, msg: str):
-        self.btn_print.setEnabled(True)
+        for j in self.queue_manager.jobs:
+            if j.job_id == job_id:
+                j.progress = percent
+                if percent >= 70:
+                    j.status = JobStatus.PRINTING
+                else:
+                    j.status = JobStatus.RASTERIZING
+                j.status_detail = msg
+                break
+        self.queue_widget.update_queue(self.queue_manager.jobs)
+
+    def _on_print_finished(self, job_id: str, success: bool, msg: str):
         self.progress_bar.setVisible(False)
-        self.status_bar.showMessage(msg)
+        self.status_bar.showMessage(f"[{job_id}] {msg}")
 
-        if success:
-            # Deduct consumed ink dynamically based on printed page volume
-            copies = self.spin_copies.value()
-            total_printed = max(1, self.imported_doc_pages * copies)
+        finished_job = None
+        for j in self.queue_manager.jobs:
+            if j.job_id == job_id:
+                finished_job = j
+                j.progress = 100 if success else j.progress
+                j.status = JobStatus.COMPLETED if success else JobStatus.FAILED
+                j.status_detail = msg
+                break
+
+        self.queue_widget.update_queue(self.queue_manager.jobs)
+
+        if success and finished_job:
+            # Deduct ink dynamically based on printed page volume
             color_mode = self.combo_color.currentData()
             res = self.combo_dpi.currentData()
-            self.ink_tracker.consume_print_job(total_printed, color_mode=color_mode, resolution=res)
+            self.ink_tracker.consume_print_job(
+                finished_job.total_printed_pages,
+                color_mode=color_mode,
+                resolution=res,
+            )
             new_levels = self.ink_tracker.get_levels()
             self.ink_widget.update_levels(
                 new_levels["BK"], new_levels["C"], new_levels["M"], new_levels["Y"]
             )
-            QMessageBox.information(self, "Pencetakan Berhasil", msg)
-        else:
-            QMessageBox.critical(self, "Gagal Mencetak", msg)
+
+        # Automatically pick up next waiting job in queue!
+        self._process_next_job()
+
+    def _on_cancel_job_requested(self, job_id: str):
+        """Cancels specified print job (whether running or waiting in queue)."""
+        if self.active_print_worker and self.active_print_worker.isRunning():
+            if getattr(self.active_print_worker, "job_id", None) == job_id:
+                self.active_print_worker.cancel()
+                self.status_bar.showMessage(f"Membatalkan tugas aktif {job_id}...")
+
+        cancelled_job = self.queue_manager.cancel_job(job_id)
+        self.queue_widget.update_queue(self.queue_manager.jobs)
+        if cancelled_job:
+            self.status_bar.showMessage(f"Tugas cetak {job_id} ({cancelled_job.file_name}) dibatalkan.")
+
+    def _on_clear_queue_requested(self):
+        """Cleans up completed, cancelled, and failed jobs from queue view."""
+        self.queue_manager.clear_finished()
+        self.queue_widget.update_queue(self.queue_manager.jobs)
+        self.status_bar.showMessage("Riwayat tugas selesai/dibatalkan telah dibersihkan.")
+
+    def _sync_queue_status(self):
+        """Periodically polls CUPS spooler to sync external jobs."""
+        self.queue_manager.sync_cups_jobs()
+        self.queue_widget.update_queue(self.queue_manager.jobs)
 
     def _trigger_maintenance(self, action: str):
         """Executes maintenance action."""
