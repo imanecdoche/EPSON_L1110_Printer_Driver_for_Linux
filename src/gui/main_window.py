@@ -37,6 +37,7 @@ from ..core.escpr_protocol import (
 from ..core.rasterizer import DocumentRasterizer
 from ..core.maintenance import MaintenanceController
 from ..core.usb_device import EpsonUSBDevice
+from ..core.ink_tracker import InkTracker
 from .ink_widget import InkLevelWidget
 from .preview_widget import PreviewWidget
 from .worker_thread import PrintJobWorker, MaintenanceWorker
@@ -54,6 +55,7 @@ class MainWindow(QMainWindow):
 
         # Core controllers
         self.maintenance_controller = MaintenanceController()
+        self.ink_tracker = InkTracker()
         self.usb_device: Optional[EpsonUSBDevice] = None
         self.current_file_path: Optional[str] = None
         self.imported_doc_pages: int = 0
@@ -236,6 +238,11 @@ class MainWindow(QMainWindow):
 
         # Ink Widget
         self.ink_widget = InkLevelWidget()
+        init_levels = self.ink_tracker.get_levels()
+        self.ink_widget.update_levels(
+            init_levels["BK"], init_levels["C"], init_levels["M"], init_levels["Y"]
+        )
+        self.ink_widget.levels_changed.connect(self._on_ink_calibrated)
         right_layout.addWidget(self.ink_widget)
 
         # Maintenance Group
@@ -355,6 +362,11 @@ class MainWindow(QMainWindow):
         self.active_print_worker.job_finished.connect(self._on_print_finished)
         self.active_print_worker.start()
 
+    def _on_ink_calibrated(self, bk: int, c: int, m: int, y: int):
+        """Save manual calibration to persistent tracker."""
+        self.ink_tracker.set_levels(bk, c, m, y)
+        self.status_bar.showMessage(f"Level tangki tinta dikalibrasi: BK {bk}%, C {c}%, M {m}%, Y {y}%")
+
     def _on_print_progress(self, percent: int, msg: str):
         self.progress_bar.setValue(percent)
         self.status_bar.showMessage(msg)
@@ -365,6 +377,16 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(msg)
 
         if success:
+            # Deduct consumed ink dynamically based on printed page volume
+            copies = self.spin_copies.value()
+            total_printed = max(1, self.imported_doc_pages * copies)
+            color_mode = self.combo_color.currentData()
+            res = self.combo_dpi.currentData()
+            self.ink_tracker.consume_print_job(total_printed, color_mode=color_mode, resolution=res)
+            new_levels = self.ink_tracker.get_levels()
+            self.ink_widget.update_levels(
+                new_levels["BK"], new_levels["C"], new_levels["M"], new_levels["Y"]
+            )
             QMessageBox.information(self, "Pencetakan Berhasil", msg)
         else:
             QMessageBox.critical(self, "Gagal Mencetak", msg)
@@ -386,6 +408,13 @@ class MainWindow(QMainWindow):
             dialog = HeadCleaningDialog(self.maintenance_controller, self.usb_device, parent=self)
             dialog.request_nozzle_check.connect(lambda: self._trigger_maintenance("nozzle"))
             dialog.exec()
+
+            # Head cleaning consumes a small fraction of ink for flushing
+            self.ink_tracker.consume_head_cleaning()
+            new_levels = self.ink_tracker.get_levels()
+            self.ink_widget.update_levels(
+                new_levels["BK"], new_levels["C"], new_levels["M"], new_levels["Y"]
+            )
             return
 
         action_names = {
