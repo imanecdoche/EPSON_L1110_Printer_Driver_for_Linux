@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QGroupBox,
+    QFrame,
 )
 from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtCore import Qt
@@ -58,40 +59,64 @@ class PreviewWidget(QGroupBox):
         self.scroll_area.setWidget(self.lbl_canvas)
         layout.addWidget(self.scroll_area)
 
-        # Navigation & Zoom Bar
+        # Navigation & Zoom Bar: [<] 1/100 [>] | [-] [+] [Fit] [1:1]
         nav_layout = QHBoxLayout()
         nav_layout.setSpacing(6)
+        nav_layout.addStretch()
 
-        self.btn_prev = QPushButton("◀ Sebelumnya")
+        self.btn_prev = QPushButton("<")
+        self.btn_prev.setFixedWidth(36)
         self.btn_prev.setEnabled(False)
+        self.btn_prev.setToolTip("Halaman Sebelumnya")
         self.btn_prev.clicked.connect(self.prev_page)
         nav_layout.addWidget(self.btn_prev)
 
-        self.lbl_page = QLabel("Halaman 0 / 0")
+        self.lbl_page = QLabel("0/0")
         self.lbl_page.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_page.setMinimumWidth(50)
         nav_layout.addWidget(self.lbl_page)
 
-        self.btn_next = QPushButton("Berikutnya ▶")
+        self.btn_next = QPushButton(">")
+        self.btn_next.setFixedWidth(36)
         self.btn_next.setEnabled(False)
+        self.btn_next.setToolTip("Halaman Berikutnya")
         self.btn_next.clicked.connect(self.next_page)
         nav_layout.addWidget(self.btn_next)
 
-        nav_layout.addStretch()
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        nav_layout.addWidget(sep)
 
-        self.btn_zoom_out = QPushButton("Zoom -")
+        self.btn_zoom_out = QPushButton("-")
+        self.btn_zoom_out.setFixedWidth(36)
         self.btn_zoom_out.setEnabled(False)
+        self.btn_zoom_out.setToolTip("Perkecil (-)")
         self.btn_zoom_out.clicked.connect(self.zoom_out)
         nav_layout.addWidget(self.btn_zoom_out)
 
-        self.btn_zoom_in = QPushButton("Zoom +")
+        self.btn_zoom_in = QPushButton("+")
+        self.btn_zoom_in.setFixedWidth(36)
         self.btn_zoom_in.setEnabled(False)
+        self.btn_zoom_in.setToolTip("Perbesar (+)")
         self.btn_zoom_in.clicked.connect(self.zoom_in)
         nav_layout.addWidget(self.btn_zoom_in)
 
-        self.btn_fit = QPushButton("Pas Ukuran")
+        self.btn_fit = QPushButton("Fit")
+        self.btn_fit.setFixedWidth(46)
         self.btn_fit.setEnabled(False)
+        self.btn_fit.setToolTip("Pas Ukuran Jendela")
         self.btn_fit.clicked.connect(self.fit_to_window)
         nav_layout.addWidget(self.btn_fit)
+
+        self.btn_1to1 = QPushButton("1:1")
+        self.btn_1to1.setFixedWidth(46)
+        self.btn_1to1.setEnabled(False)
+        self.btn_1to1.setToolTip("Ukuran Asli 100%")
+        self.btn_1to1.clicked.connect(self.actual_size)
+        nav_layout.addWidget(self.btn_1to1)
+
+        nav_layout.addStretch()
 
         layout.addLayout(nav_layout)
 
@@ -108,10 +133,16 @@ class PreviewWidget(QGroupBox):
             self.btn_zoom_in.setEnabled(True)
             self.btn_zoom_out.setEnabled(True)
             self.btn_fit.setEnabled(True)
+            self.btn_1to1.setEnabled(True)
         except Exception as e:
             self.lbl_canvas.setText(f"Gagal memuat pratinjau: {e}")
+            self.lbl_page.setText("0/0")
             self.btn_prev.setEnabled(False)
             self.btn_next.setEnabled(False)
+            self.btn_zoom_in.setEnabled(False)
+            self.btn_zoom_out.setEnabled(False)
+            self.btn_fit.setEnabled(False)
+            self.btn_1to1.setEnabled(False)
 
     def _render_current_page(self):
         """Renders page via rasterizer and displays in canvas."""
@@ -125,7 +156,7 @@ class PreviewWidget(QGroupBox):
         self.base_pixmap = pil_to_qpixmap(pil_img)
         self._apply_zoom()
 
-        self.lbl_page.setText(f"Halaman {self.current_page + 1} / {self.total_pages}")
+        self.lbl_page.setText(f"{self.current_page + 1}/{self.total_pages}")
         self.btn_prev.setEnabled(self.current_page > 0)
         self.btn_next.setEnabled(self.current_page < self.total_pages - 1)
 
@@ -166,3 +197,11 @@ class PreviewWidget(QGroupBox):
         area_h = max(200, self.scroll_area.viewport().height() - 20)
         self.zoom_factor = area_h / self.base_pixmap.height()
         self._apply_zoom()
+
+    def actual_size(self):
+        """Reset zoom factor to 1.0 (100% original scale)."""
+        if not self.base_pixmap:
+            return
+        self.zoom_factor = 1.0
+        self._apply_zoom()
+
