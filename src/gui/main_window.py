@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
         self.maintenance_controller = MaintenanceController()
         self.usb_device: Optional[EpsonUSBDevice] = None
         self.current_file_path: Optional[str] = None
+        self.imported_doc_pages: int = 0
         self.active_print_worker: Optional[PrintJobWorker] = None
         self.active_maint_worker: Optional[MaintenanceWorker] = None
 
@@ -149,6 +150,7 @@ class MainWindow(QMainWindow):
         self.spin_copies = QSpinBox()
         self.spin_copies.setRange(1, 99)
         self.spin_copies.setValue(1)
+        self.spin_copies.valueChanged.connect(self._update_total_print_pages_label)
         left_layout.addWidget(self.spin_copies)
 
         # Print Order (Normal vs Reverse)
@@ -160,6 +162,21 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.combo_order)
 
         left_layout.addStretch()
+
+        # Informative Total Pages to Print Box (Physical pages = doc pages * copies)
+        self.lbl_total_print_pages = QLabel("Total halaman dicetak: <b>0 lembar</b>")
+        self.lbl_total_print_pages.setStyleSheet("""
+            QLabel {
+                background-color: #f7f9fa;
+                border: 1px solid #d0d7de;
+                border-radius: 4px;
+                padding: 8px 10px;
+                font-size: 12px;
+                color: #24292f;
+            }
+        """)
+        self.lbl_total_print_pages.setWordWrap(True)
+        left_layout.addWidget(self.lbl_total_print_pages)
 
         # Print Button
         self.btn_print = QPushButton("Cetak Dokumen")
@@ -275,7 +292,31 @@ class MainWindow(QMainWindow):
             self.current_file_path = path
             self.lbl_selected_file.setText(os.path.basename(path))
             self.btn_print.setEnabled(True)
+            rasterizer = self._get_current_rasterizer()
+            try:
+                self.imported_doc_pages = rasterizer.get_page_count(path)
+            except Exception:
+                self.imported_doc_pages = 1
+            self._update_total_print_pages_label()
             self._update_preview()
+
+    def _update_total_print_pages_label(self):
+        """Calculates and displays total physical pages to be printed (doc pages * copies)."""
+        copies = self.spin_copies.value()
+        if self.current_file_path and self.imported_doc_pages > 0:
+            total_print_pages = self.imported_doc_pages * copies
+            if copies > 1:
+                self.lbl_total_print_pages.setText(
+                    f"Total halaman dicetak: <b>{total_print_pages} lembar</b><br>"
+                    f"<span style='color: #555555; font-size: 11px;'>({copies} salinan × {self.imported_doc_pages} halaman dokumen)</span>"
+                )
+            else:
+                self.lbl_total_print_pages.setText(
+                    f"Total halaman dicetak: <b>{total_print_pages} lembar</b><br>"
+                    f"<span style='color: #555555; font-size: 11px;'>(1 salinan × {self.imported_doc_pages} halaman dokumen)</span>"
+                )
+        else:
+            self.lbl_total_print_pages.setText("Total halaman dicetak: <b>0 lembar</b>")
 
     def _on_settings_changed(self):
         """Triggered when paper or resolution changes."""
