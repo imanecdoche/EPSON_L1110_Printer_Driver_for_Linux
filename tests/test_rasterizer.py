@@ -95,8 +95,8 @@ def test_maintenance_commands():
     nozzle_cmd = MaintenanceCommands.nozzle_check()
     eject_cmd = MaintenanceCommands.paper_eject()
 
-    assert b"REMOTE1" in clean_cmd and b"CH" in clean_cmd
-    assert b"REMOTE1" in nozzle_cmd and b"NC" in nozzle_cmd
+    assert b"REMOTE1CH" in clean_cmd
+    assert b"REMOTE1VI" in nozzle_cmd and b"NC" in nozzle_cmd
     assert b"\x0c" in eject_cmd
     print("[PASS] Maintenance command formats verified!")
 

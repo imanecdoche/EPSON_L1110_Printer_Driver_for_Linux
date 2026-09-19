@@ -212,32 +212,30 @@ class MaintenanceCommands:
     @staticmethod
     def head_cleaning() -> bytes:
         """
-        Constructs the binary ESC/P-R Remote Mode command for Print Head Cleaning.
-        ESC ( R \x08\x00 REMOTE1 \x1b\x00\x00\x00 CH \x02\x00\x00\x00 \x1b\x00\x00\x00
+        Constructs the verified binary ESC/P2 / ESC/P-R Remote Mode command for Head Cleaning.
+        Exact binary sequence (tested & verified via Gutenprint protocol standard):
+        - ESC @
+        - ESC ( R \x08\x00 \x00 REMOTE1  (8 bytes: null prefix + 7-char REMOTE1)
+        - CH \x02\x00 \x00\x00           (Clean all heads)
+        - ESC \x00\x00\x00               (Exit Remote Mode)
+        - ESC \x00\x0c\x1b\x00\x1b\x00   (Eject paper feed reset)
         """
-        buf = bytearray()
-        # Initialize
-        buf.extend(b"\x1b@")
-        # Enter Remote1 Mode
-        buf.extend(b"\x1b(R\x08\x00REMOTE1")
-        # Clean Head (CH) command
-        buf.extend(b"\x1b\x00\x00\x00CH\x02\x00\x00\x00")
-        # Exit Remote Mode
-        buf.extend(b"\x1b\x00\x00\x00\x1b@")
-        return bytes(buf)
+        return b"\x1b@\x1b(R\x08\x00\x00REMOTE1CH\x02\x00\x00\x00\x1b\x00\x00\x00\x1b\x00\x0c\x1b\x00\x1b\x00"
 
     @staticmethod
     def nozzle_check() -> bytes:
         """
-        Constructs the binary command to print standard 4-Color Nozzle Check Pattern.
+        Constructs the verified binary ESC/P2 / ESC/P-R Remote Mode command for Nozzle Check.
+        Exact binary sequence:
+        - ESC @
+        - ESC ( R \x08\x00 \x00 REMOTE1
+        - VI \x02\x00 \x00\x00
+        - NC \x02\x00 \x00\x10
+        - NC \x02\x00 \x00\x00           (Trigger 4-color nozzle check pattern)
+        - ESC \x00\x00\x00
+        - ESC \x00\x0c\x1b\x00\x1b\x00
         """
-        buf = bytearray()
-        buf.extend(b"\x1b@")
-        buf.extend(b"\x1b(R\x08\x00REMOTE1")
-        # Nozzle Check (NC) command
-        buf.extend(b"\x1b\x00\x00\x00NC\x02\x00\x00\x00")
-        buf.extend(b"\x1b\x00\x00\x00\x1b@")
-        return bytes(buf)
+        return b"\x1b@\x1b(R\x08\x00\x00REMOTE1VI\x02\x00\x00\x00NC\x02\x00\x00\x10NC\x02\x00\x00\x00\x1b\x00\x00\x00\x1b\x00\x0c\x1b\x00\x1b\x00"
 
     @staticmethod
     def paper_eject() -> bytes:
